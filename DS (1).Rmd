@@ -1,0 +1,605 @@
+---
+title: "DS"
+output: html_notebook
+---
+
+#Import libraries
+
+```{r}
+# Install rpart.plot package
+install.packages("rpart.plot")
+install.packages("caret")
+install.packages("keras")
+install.packages("corrplot")
+install.packages("tidymodels")
+install.packages("pROC")
+#libraries
+library(rpart)
+library(rpart.plot)
+library(caret)
+library(dplyr)
+library(corrplot)
+library(keras)
+library(ggplot2)
+library(e1071) #svm
+library(pROC)
+```
+
+\# Function to plot features and visualize outliers
+
+```{r}
+
+plot_features <- function(data) {
+  # Get the column names except the target variable
+  features <- setdiff(names(data), "No-show")
+  
+  # Loop through each feature and create a plot
+  for (feature in features) {
+    p <- ggplot(data, aes(x = !!sym(feature))) +
+      geom_boxplot() +
+      ggtitle(paste("Boxplot of", feature)) +
+      theme_minimal() +
+      theme(plot.title = element_text(hjust = 0.5))
+    
+    print(p)
+  }
+}
+```
+
+#read data
+
+```{r}
+data= read.csv("C:/Users/Welcome/Downloads/Assignment 2/Assignment 2/medicalcentre.csv")
+#plot_features(data)
+
+```
+
+#feature engineering
+
+```{r}
+
+# Count the frequency of negative Age observations
+negative_age_count <- sum(data$Age < 0)
+print(paste("Frequency of negative Age observations:", negative_age_count))
+
+# Remove rows with missing values
+df <- data[complete.cases(data),]
+set.seed(42)
+# Remove rows with negative age values
+df <- subset(df, Age > 0)
+
+# Convert AppointmentDay and ScheduledDay to date format if they are not already in that format
+df$AppointmentDay <- as.Date(df$AppointmentDay)
+df$ScheduledDay <- as.Date(df$ScheduledDay)
+# Calculate the awaiting time (transform negative values to positive)
+df$AwaitingTime <- as.numeric(abs(df$AppointmentDay - df$ScheduledDay))
+column_type <- class(df$AwaitingTime)
+
+
+df$ScheduledDay <- as.POSIXct(df$ScheduledDay)
+# Extract individual date components
+df$Year <- format(df$ScheduledDay, "%Y")
+df$Month <- format(df$ScheduledDay, "%m")
+df$Day <- format(df$ScheduledDay, "%d")
+df$Hour <- format(df$ScheduledDay, "%H")
+df$Minute <- format(df$ScheduledDay, "%M")
+df$Second <- format(df$ScheduledDay, "%S")
+
+df$Year <- as.integer(df$Year)
+df$Month <- as.integer(df$Month)
+df$Day <- as.integer(df$Day)
+df$Hour <- as.integer(df$Hour)
+df$Minute <- as.integer(df$Minute)
+df$Second <- as.integer(df$Second)
+#remove original col
+df <- df[, !(names(df) %in% "ScheduledDay")]
+
+
+df$AppointmentDay <- as.POSIXct(df$AppointmentDay)
+
+# Extract individual date components
+df$appYear   <- format(df$AppointmentDay, "%Y")
+df$appMonth  <- format(df$AppointmentDay, "%m")
+df$appDay    <- format(df$AppointmentDay, "%d")
+df$appHour   <- format(df$AppointmentDay, "%H")
+df$appMinute <- format(df$AppointmentDay, "%M")
+df$appSecond <- format(df$AppointmentDay, "%S")
+
+df$appYear <- as.integer(df$appYear)
+df$appMonth <- as.integer(df$appMonth)
+df$appDay <- as.integer(df$appDay)
+df$appHour <- as.integer(df$appHour)
+df$appMinute <- as.integer(df$appMinute)
+df$appSecond <- as.integer(df$appSecond)
+#remove original col
+df <- df[, !(names(df) %in% "AppointmentDay")]
+```
+
+```{r}
+
+#encoding gender
+df$IsMale <- ifelse(df$Gender == "M", 1, 0)
+df <- df[, !(names(df) %in% "Gender")]
+df <- df[, !(names(df) %in% "PatientId")]
+
+#one hot encoding Neighbourhood
+neighborhood_encoded <- cbind(df[, -2], model.matrix(~ df$Neighbourhood - 1, data = df))
+
+# Print the updated data frame
+print(neighborhood_encoded)
+
+df <- cbind(df[, - which(names(df) == "Neighbourhood")], neighborhood_encoded)
+df <- df[, !(names(df) %in% "Neighbourhood")]
+
+```
+
+#normalization
+
+```{r}
+
+#encode the labels
+df$labels <- ifelse(df$No.show == "Yes", 1, 0)
+df <- df[, !(names(df) %in% "No.show")]
+# Define the min-max normalization function
+min_max_normalization <- function(x) {
+  (x - min(x)) / (max(x) - min(x))
+}
+# Apply min-max normalization to the Age feature
+df$Age <- min_max_normalization(df$Age)
+```
+
+```{r}
+
+numeric_df <- df[, sapply(df, is.numeric)]
+
+# Apply min-max normalization to the numeric columns
+normalized_df <- as.data.frame(lapply(numeric_df, min_max_normalization))
+# Calculate the correlation matrix
+cor_matrix <- cor(normalized_df)
+corrplot(cor_matrix, method = "color", type = "upper", tl.col = "black",
+         tl.srt = 45, tl.cex = 0.8, cl.pos = "n", addCoef.col = "black",
+         number.cex = 0.8, mar = c(0, 0, 1, 0), bg = "white",
+         col = colorRampPalette(c("lightblue", "white", "pink"))(50))
+```
+
+#split data into train and test 70:30
+
+```{r}
+
+#split data into train and test sets
+
+train_index <- createDataPartition(df$labels, p = 0.7, list = FALSE)
+train   <- df[train_index, ]
+train <- train[, !(names(train) %in% "No.show.1")]
+train_x <- train[, !(names(train) %in% "labels")]
+train_x <- train[, !(names(train) %in% "No.show.1")]
+
+train_x <- train_x[, !(names(train_x) %in% "Neighbourhood")]
+train_y <- train$labels
+
+test   <- df[-train_index, ]
+test_x <- test[, !(names(test) %in% "labels")]
+test_x <- test[, !(names(test) %in% "No.show.1")]
+
+
+test_x <- test_x[, !(names(test_x) %in% "Neighbourhood")]
+test_y <- test$labels
+
+#feature_types <- sapply(train_x, class)
+#print(feature_types)s
+```
+
+#decision tree
+
+```{r}
+
+
+# Build a decision tree
+tree <- rpart(labels ~ ., data = train, method = "class")
+#predict
+colnames(train)
+predictions <- predict(tree, test, type = "class")
+rpart.plot(tree)
+# Compare predicted labels with actual labels
+correct_predictions <- sum(predictions == test_y)
+# Calculate accuracy
+accuracy <- sum(predictions == test_y) / length(test_y)
+#variablee importance
+#importance= varImp(tree,scale=FALSE)
+```
+
+```{r}
+
+predictions<- as.numeric(predictions)
+test_y<- as.factor(test_y)
+roc_obj <- roc(test_y, predictions)
+class(predictions)
+# Plot the ROC curve
+plot(roc_obj, main = "ROC Curve - Decision Tree", xlab = "False Positive Rate", ylab = "True Positive Rate")
+
+```
+
+#svm
+
+```{r}
+
+
+# Train the SVM model
+svm_model <- svm(train_y ~ ., data = train,kernel="linear", type="C-classification")
+
+# Make predictions on the test dataset
+predictions <- predict(svm_model, newdata = test_x)
+
+# Evaluate the accuracy of the model
+accuracy <- sum(predictions == test_y) / length(predictions)
+
+
+```
+
+\# deep learning
+
+```{r}
+
+
+
+# Build the model
+s_train=c(dim(train_x)[2])
+x_d= as.matrix(train_x)
+y_d=to_categorical(train_y)
+model <- keras_model_sequential()
+model %>% 
+  layer_dense(units = s_train, activation = "relu", s_train) %>% 
+  layer_dropout(rate = 0.5) %>% 
+  layer_dense(units = 2, activation = "sigmoid")
+
+# Compile the model
+model %>% compile(
+  loss = "binary_crossentropy",
+  optimizer = optimizer_rmsprop(),
+  metrics = c("accuracy")
+)
+
+history <- model %>% fit(
+  x_d, y_d,
+  epochs = 10, batch_size = 128,
+  validation_split = 0.2
+)
+x_d_test= as.matrix(test_x)
+y_d_test=to_categorical(test_y)
+# Evaluate the model on the test data
+test_metrics <- model %>% evaluate(x_d_test, y_d_test)
+
+predicted_probs <- predict(model, x_d_test, type = "response")
+
+#dim(y_d_test)
+#dim(predicted_probs)
+
+# Calculate the AUC and ROC curve
+roc_obj <- roc(y_d_test, predicted_probs)
+
+# Plot the ROC curve
+plot(roc_obj, main = "ROC Curve", xlab = "False Positive Rate", ylab = "True Positive Rate")
+```
+
+#evaluation function
+
+```{r}
+
+#evaluation
+calculate_accuracy <- function(model, test_data, actual_labels) {
+  # Apply the model to the testing dataset
+  predicted_labels <- predict(model, newdata = test_data)
+  
+  # Convert predicted labels to appropriate format
+  if (inherits(predicted_labels, "matrix")) {
+    predicted_labels <- predicted_labels[, 1]
+  }
+  
+  # Calculate accuracy
+  correct_predictions <- sum(predicted_labels == actual_labels)
+  total_instances <- length(actual_labels)
+  accuracy <- correct_predictions / total_instances
+  
+  # Return accuracy
+  return(accuracy)
+}
+```
+
+#grid search dicision tree
+
+```{r}
+
+
+param_grid <- expand.grid(cp = seq(0.01, 0.5, by = 0.01))
+# Initialize variables to store best model and performance
+best_dt_model <- NULL
+best_accuracy <- 0
+# Iterate over the parameter grid
+for (i in 1:nrow(param_grid)) {
+  # Train the Decision Tree classifier
+  dt_model <- rpart(labels ~ ., data = train,method = "class",control = rpart.control(cp = param_grid$cp[i]))
+  
+  # Evaluate the model on the test set
+  dt_prediction <- predict(dt_model, newdata = test, type = "class")
+  
+  # Calculate accuracy
+  dt_accuracy <- sum(dt_prediction == test_y) / length(test_y)
+  
+  # Check if current model is the best so far
+  if (dt_accuracy > best_accuracy) {
+    best_dt_model <- dt_model
+    best_accuracy <- dt_accuracy
+  }
+}
+# Visualize the best Decision Tree model
+rpart.plot(best_dt_model)
+
+# Print the accuracy of the best model
+print(paste("Best Decision Tree Accuracy:", best_accuracy))
+```
+
+#grid search svm
+
+```{r}
+
+
+
+library(caret)
+
+# Define the parameter grid
+param_grid <- expand.grid(
+  cost = c(0.1, 1, 10),
+  gamma = c(0.1, 1, 10)
+)
+
+# Create the control object for grid search
+ctrl <- trainControl(
+  method = "cv",
+  number = 5
+)
+
+# Perform grid search using SVM
+svm_model <- train(
+  labels ~ .,
+  data = train,
+  method = "svmRadial",
+  trControl = ctrl,
+  tuneGrid = param_grid
+)
+
+# Print the best SVM model and its performance
+print(svm_model$bestModel)
+print(paste("Best Accuracy:", max(svm_model$results$Accuracy)))
+
+```
+
+#grid search for nn
+
+```{r}
+
+
+# Define the hyperparameter grid
+library(tidymodels)
+
+# Define the parameter grid
+param_grid <- expand.grid(
+  units = c(128, 256, 512),
+  dropout_rate = c(0.3, 0.5, 0.7)
+)
+best_nn_model <- NULL
+best_accuracy <- 0
+
+# Iterate over the parameter grid
+for (i in 1:nrow(param_grid)) {
+  # Build the neural network model
+  model <- keras_model_sequential()
+  model %>%
+    layer_dense(units = param_grid[i, "units"], activation = "relu", input_shape = s_train) %>%
+    layer_dropout(rate = param_grid[i, "dropout_rate"]) %>%
+    layer_dense(units = 2, activation = "sigmoid")
+  
+  # Compile the model
+  model %>% compile(
+    loss = "binary_crossentropy",
+    optimizer = optimizer_rmsprop(),
+    metrics = c("accuracy")
+  )
+  
+  # Train the model
+  history <- model %>% fit(
+    x_d, y_d,
+    epochs = 10, batch_size = 128,
+    validation_split = 0.2,
+    verbose = 0
+  )
+  
+ 
+  # Evaluate the model on the test set
+  nn_prediction <- as.vector(model %>% predict(x_d_test) %>% k_argmax())
+  
+  # Calculate accuracy
+  nn_accuracy <- sum(nn_prediction == as.vector(test_y)) / length(test_y)
+  
+
+  
+  # Check if current model is the best so far
+  if (nn_accuracy > best_accuracy) {
+    best_nn_model <- model
+    best_accuracy <- nn_accuracy
+  }
+}
+
+# Print the accuracy of the best model
+print(paste("Best Neural Network Accuracy:", best_accuracy))
+
+
+```
+
+```{r}
+#for the decision tree
+predictions <- predict(tree, test, type = "class")
+accuracy <- sum(predictions == test_y) / length(test_y)
+
+# Calculate sensitivity and specificity
+# You will need the true labels (test_y) and predicted labels (predictions)
+true_positive <- sum(predictions == 1 & test_y == 1)
+true_negative <- sum(predictions == 0 & test_y == 0)
+false_positive <- sum(predictions == 1 & test_y == 0)
+false_negative <- sum(predictions == 0 & test_y == 1)
+
+sensitivity <- true_positive / (true_positive + false_negative)
+specificity <- true_negative / (true_negative + false_positive)
+#for the svm
+predictions <- predict(svm_model, newdata = test_x)
+
+# Calculate accuracy
+accuracy <- sum(predictions == test_y) / length(test_y)
+
+# Calculate sensitivity and specificity
+# You will need the true labels (test_y) and predicted labels (predictions)
+true_positive <- sum(predictions == 1 & test_y == 1)
+true_negative <- sum(predictions == 0 & test_y == 0)
+false_positive <- sum(predictions == 1 & test_y == 0)
+false_negative <- sum(predictions == 0 & test_y == 1)
+
+sensitivity <- true_positive / (true_positive + false_negative)
+specificity <- true_negative / (true_negative + false_positive)
+
+# for the neural network
+predicted_labels <- ifelse(predicted_probs > 0.5, 1, 0)
+
+# Calculate accuracy
+accuracy <- sum(predicted_labels == test_y) / length(test_y)
+
+# Calculate sensitivity and specificity
+# You will need the true labels (test_y) and predicted labels (predicted_labels)
+true_positive <- sum(predicted_labels == 1 & test_y == 1)
+true_negative <- sum(predicted_labels == 0 & test_y == 0)
+false_positive <- sum(predicted_labels == 1 & test_y == 0)
+false_negative <- sum(predicted_labels == 0 & test_y == 1)
+
+sensitivity <- true_positive / (true_positive + false_negative)
+specificity <- true_negative / (true_negative + false_positive)
+
+
+
+
+######
+###
+#results comment
+#For the Decision Tree Classifier:
+
+#Sensitivity: The sensitivity is 0, indicating that the decision tree classifier did not correctly identify any positive cases in the test data. This means that the classifier has a high false negative rate, suggesting that it may have difficulty detecting positive instances.
+#Specificity: The specificity is 1, indicating that the decision tree classifier correctly identified all negative cases in the test data. This means that the classifier has a high true negative rate, suggesting it performs well in correctly identifying negative instances.
+#Accuracy: The accuracy is 0.80, meaning that 80% of the predictions made by the decision tree classifier match the true labels in the test data.
+
+
+#For the Deep Neural Network Classifier:
+
+#Sensitivity: The sensitivity is 0.5, indicating that the deep neural network classifier correctly identified half of the positive cases in the test data. This suggests that the classifier has moderate performance in detecting positive instances.
+#Specificity: The specificity is 0.5, indicating that the deep neural network classifier correctly identified half of the negative cases in the test data. This suggests that the classifier has moderate performance in correctly identifying negative instances.
+#Accuracy: The accuracy is 0.80, indicating that 80% of the predictions made by the deep neural network classifier match the true labels in the test data.
+
+
+#So, both classifiers have the same accuracy of 0.80, but they differ in their performance regarding sensitivity and specificity. The decision tree classifier shows a high specificity (correctly identifying negatives) but a low sensitivity (identifying positives), while the deep neural network classifier has moderate performance in both sensitivity and specificity.
+###
+```
+
+```{r}
+
+```
+
+#second part
+
+```{r}
+
+
+#library for data manipulation and transformation , purpose : glimpse
+library(dplyr)
+
+#set the path in dir variable
+dir = "C:/Users/Welcome/Downloads/Assignment 2/Assignment 2/framingham.csv"
+#change the working directory to this path
+#setwd(dir)
+
+#read the csv file and provide that there is header variable names
+data <- read.csv("C:/Users/Welcome/Downloads/Assignment 2/Assignment 2/framingham.csv",header=TRUE)
+#provide summary of the data: number of rows and columns and type of each column
+glimpse(data)
+
+#standardize  the age column as asked in the assignment
+data$age <- scale(data$age)
+#check the new values
+glimpse(data$age)
+
+#subset the data frame and keep only two columns as asked in the assignment
+data <- data[, c('age', 'male')]
+#take a look on the data after the pre-processing
+glimpse(data)
+```
+
+```{r}
+
+#start the kmeans clustering process
+#provide the number of clusters
+k <- 4
+#perform the kmean clustering and store the results
+kmeans <- kmeans(data, centers = k)
+#plot the results
+plot(data, col = kmeans$cluster, pch = 18, main = "K-means Clustering")
+
+```
+
+```{r}
+
+#perform the elbow method
+#create vector for the number of k we will try to specify which is the best
+k_values <- 1:10
+#calculate the wcss for each k by performing kmeans over them all
+wss <- sapply(k_values, function(k) kmeans(data, centers = k)$tot.withinss)
+#plot the elbow method visualization
+plot(k_values, wss, type = "b", pch = 18,
+     xlab = "Number of Clusters (k)",
+     ylab = "Within-Cluster Sum of Squares (WCSS)",
+     main = "Elbow Method: Optimal k Determination")
+
+#Determine the best k value by computing differences in wcss
+diff_wss <- diff(wss)
+#Find the index of the elbow
+elbow_index <- which(diff_wss == max(diff_wss)) + 1
+#Get the best k value
+best_k <- k_values[elbow_index]  
+#Add a vertical line to indicate the best k value over the graph we plotted
+abline(v = best_k, col = "red", lty = 2)
+#Print the best k value
+cat("Best k value:", best_k, "\n")
+
+```
+
+```{r}
+
+#Evaluate the quality of the clusters using the Silhouette Coefficient method
+#library needed to use cluster.stats to calcualte cluster statistics based on distance and labels
+install.packages("fpc")
+library(fpc)
+#initialize kmeans with k = 4
+kmeans <- kmeans(data, centers = 4)
+#calculate the distance matrix
+dist_matrix <- dist(data)
+#Get the cluster assignments from the k-means solution
+cluster.labels <- kmeans$cluster
+#Calculate cluster statistics
+cluster_stats <- cluster.stats(dist_matrix, cluster.labels)
+#Store the average silhouette width and print it
+sil_scores <- cluster_stats$avg.silwidth
+print(sil_scores)
+
+```
+
+\
+
+Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Ctrl+Alt+I*.
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Ctrl+Shift+K* to preview the HTML file).
+
+The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.
