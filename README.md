@@ -40,9 +40,6 @@ To get started with this project, follow these steps:
 ## Contributing
 We welcome contributions and improvements to this project. If you have any suggestions, bug fixes, or additional data science techniques to add, please feel free to create a pull request.
 
-## License
-This project is open-source and available under the MIT License. See the [LICENSE](LICENSE) file for details.
-
 ## Acknowledgments
 Thanks to the R community and the developers of various R packages for making data analysis and machine learning accessible and powerful!
 
